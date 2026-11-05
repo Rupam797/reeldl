@@ -1,0 +1,150 @@
+@import '../index.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dev-tool Matte Components - NO glows, NO blur, NO shadows, NO gradients */
+.glass-card, .card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none !important;
+}
+
+.card-compact {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: none !important;
+}
+
+.input-dev {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: var(--transition-fast);
+}
+
+.input-dev:focus {
+  border-color: var(--brand);
+}
+
+.btn-brand {
+  background-color: var(--brand);
+  color: #FFFFFF;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.btn-brand:hover:not(:disabled) {
+  background-color: var(--brand-hover);
+  transform: translateY(-1px);
+}
+
+.btn-brand:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background-color: var(--bg-input);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--text-dim);
+  background-color: var(--bg-card);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  color: var(--text-main);
+  background: var(--bg-input);
+  border-color: var(--border-subtle);
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.badge-brand {
+  background: rgba(255, 107, 91, 0.12);
+  color: var(--brand);
+  border: 1px solid rgba(255, 107, 91, 0.28);
+}
+
+.badge-success {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+}
+
+.badge-muted {
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.success {
+  background-color: var(--success);
+}
+
+.status-dot.brand {
+  background-color: var(--brand);
+}
+
+/* Custom scrollbar for dev-tool aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}

@@ -1,0 +1,35 @@
+server:
+  port: 8080
+  tomcat:
+    max-http-form-post-size: 1MB
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+app:
+  ytdlp-path: ${YTDLP_PATH:/usr/local/bin/yt-dlp}
+  gallerydl-path: ${GALLERYDL_PATH:gallery-dl}
+  ytdlp-cookies-file: ${YTDLP_COOKIES_FILE:}
+  extraction-timeout-seconds: ${EXTRACTION_TIMEOUT:20}
+  cache-ttl-minutes: ${CACHE_TTL_MINUTES:30}
+  max-video-size-bytes: ${MAX_VIDEO_SIZE:104857600}
+  allowed-origins: ${ALLOWED_ORIGINS:*}
+  rate-limit:
+    extract-requests-per-minute: ${RATE_LIMIT_EXTRACT:10}
+    download-requests-per-minute: ${RATE_LIMIT_DOWNLOAD:5}
+    audio-requests-per-minute: ${RATE_LIMIT_AUDIO:3}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.reeldl: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%X{requestId}] %-5level %logger{36} - %msg%n"

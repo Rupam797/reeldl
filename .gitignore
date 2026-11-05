@@ -1,0 +1,39 @@
+# Java / Maven
+backend/target/
+*.class
+*.jar
+*.war
+*.ear
+*.hprof
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+*.env.local
+*.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker overrides
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
