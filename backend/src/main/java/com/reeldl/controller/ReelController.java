@@ -2,16 +2,16 @@ package com.reeldl.controller;
 
 import com.reeldl.dto.ExtractionRequest;
 import com.reeldl.dto.ExtractionResponse;
-import com.reeldl.dto.HealthResponse;
 import com.reeldl.dto.MediaInfo;
 import com.reeldl.dto.MediaType;
 import com.reeldl.exception.ExtractionFailedException;
 import com.reeldl.exception.ExtractionTimeoutException;
+import com.reeldl.exception.ServerBusyException;
 import com.reeldl.exception.VideoTooLargeException;
 import com.reeldl.service.CacheService;
 import com.reeldl.service.ExtractorService;
+import com.reeldl.service.ProcessLimiterService;
 import com.reeldl.service.RateLimitService;
-import com.reeldl.service.YtDlpUpdateService;
 import com.reeldl.validator.PlatformDetector;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -38,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -53,7 +54,7 @@ public class ReelController {
     private final ExtractorService extractorService;
     private final CacheService cacheService;
     private final RateLimitService rateLimitService;
-    private final YtDlpUpdateService ytDlpUpdateService;
+    private final ProcessLimiterService processLimiterService;
     private final String ytdlpPath;
     private final String galleryDlPath;
     private final String cookiesFile;
@@ -66,7 +67,7 @@ public class ReelController {
             ExtractorService extractorService,
             CacheService cacheService,
             RateLimitService rateLimitService,
-            YtDlpUpdateService ytDlpUpdateService,
+            ProcessLimiterService processLimiterService,
             @Value("${app.ytdlp-path:/usr/local/bin/yt-dlp}") String ytdlpPath,
             @Value("${app.gallerydl-path:gallery-dl}") String galleryDlPath,
             @Value("${app.ytdlp-cookies-file:#{null}}") String cookiesFile,
@@ -75,7 +76,7 @@ public class ReelController {
         this.extractorService = extractorService;
         this.cacheService = cacheService;
         this.rateLimitService = rateLimitService;
-        this.ytDlpUpdateService = ytDlpUpdateService;
+        this.processLimiterService = processLimiterService;
         this.ytdlpPath = ytdlpPath;
         this.galleryDlPath = galleryDlPath;
         this.cookiesFile = cookiesFile;
@@ -93,18 +94,18 @@ public class ReelController {
         PlatformDetector.DetectionResult detection = platformDetector.detectAndValidate(request.url());
         String normalizedUrl = detection.normalizedUrl();
 
-        // Check cache first
+        // Check cache first (resilient: returns empty if Redis is unreachable)
         Optional<ExtractionResponse> cached = cacheService.getFromCache(normalizedUrl, type);
         if (cached.isPresent()) {
             log.info("Cache hit for {} extraction", type);
             return ResponseEntity.ok(cached.get());
         }
 
-        // Extract via extractor service
+        // Extract via extractor service (limited to 2 concurrent yt-dlp by semaphore)
         MediaInfo mediaInfo = extractorService.extract(normalizedUrl, type);
         ExtractionResponse response = ExtractionResponse.fromMediaInfo(mediaInfo);
 
-        // Cache result
+        // Cache result (resilient: skips cache if Redis is unreachable)
         cacheService.putInCache(normalizedUrl, type, response);
 
         log.info("Extraction completed successfully for platform: {}, type: {}", detection.platform(), type);
@@ -134,6 +135,17 @@ public class ReelController {
     }
 
     private ResponseEntity<StreamingResponseBody> downloadAudio(String normalizedUrl, String filename) {
+        try {
+            return processLimiterService.runWithFfmpegAudioPermit(() -> executeAudioExtraction(normalizedUrl, filename));
+        } catch (ExtractionFailedException | ExtractionTimeoutException | VideoTooLargeException | ServerBusyException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Audio extraction failed", e);
+            throw new ExtractionFailedException("Failed to process audio download: " + e.getMessage());
+        }
+    }
+
+    private ResponseEntity<StreamingResponseBody> executeAudioExtraction(String normalizedUrl, String filename) {
         Path tempDir;
         try {
             tempDir = Files.createTempDirectory("reeldl_audio_");
@@ -177,7 +189,7 @@ public class ReelController {
                 throw new ExtractionFailedException("Failed to extract audio stream.");
             }
 
-            // Look for the output file (yt-dlp might name it targetMp3 directly)
+            // Look for the output file
             Path finalFile = targetMp3;
             if (!Files.exists(finalFile)) {
                 try (var stream = Files.list(tempDir)) {
@@ -221,13 +233,11 @@ public class ReelController {
             throw e;
         } catch (Exception e) {
             cleanupTemp(targetMp3, tempDir);
-            log.error("Audio extraction failed", e);
             throw new ExtractionFailedException("Failed to process audio download: " + e.getMessage());
         }
     }
 
     private ResponseEntity<StreamingResponseBody> downloadPhoto(String normalizedUrl, String filename) {
-        // gallery-dl -g <url>
         String imageUrl = null;
         List<String> command = List.of(galleryDlPath, "-g", normalizedUrl);
         ProcessBuilder pb = new ProcessBuilder(command);
@@ -256,92 +266,88 @@ public class ReelController {
         }
 
         if (imageUrl == null || imageUrl.isBlank()) {
-            // Fallback to cache/extractor
             MediaInfo info = extractorService.extract(normalizedUrl, MediaType.PHOTO);
             imageUrl = info.videoUrl();
         }
 
         if (imageUrl == null || imageUrl.isBlank()) {
-            throw new ExtractionFailedException("Could not resolve direct image URL.");
+            throw new ExtractionFailedException("Unable to retrieve direct photo link.");
         }
 
         String downloadFilename = (filename != null && !filename.isBlank())
                 ? sanitizeFilename(filename, "jpg")
                 : "photo_" + (System.currentTimeMillis() / 1000) + ".jpg";
 
-        return streamFromCdnUrl(imageUrl, downloadFilename, "image/jpeg", maxPhotoSizeBytes);
+        return streamRemoteUrl(imageUrl, downloadFilename, "image/jpeg", maxPhotoSizeBytes);
     }
 
     private ResponseEntity<StreamingResponseBody> downloadVideo(String normalizedUrl, String filename) {
-        // Get extraction result (from cache or fresh)
-        ExtractionResponse extraction = cacheService.getFromCache(normalizedUrl, MediaType.VIDEO)
-                .orElseGet(() -> {
-                    MediaInfo fresh = extractorService.extract(normalizedUrl, MediaType.VIDEO);
-                    ExtractionResponse res = ExtractionResponse.fromMediaInfo(fresh);
-                    cacheService.putInCache(normalizedUrl, MediaType.VIDEO, res);
-                    return res;
-                });
+        Optional<ExtractionResponse> cached = cacheService.getFromCache(normalizedUrl, MediaType.VIDEO);
+        String cdnUrl;
 
-        String videoUrl = extraction.videoUrl();
-        if (videoUrl == null || videoUrl.isBlank()) {
-            throw new ExtractionFailedException("No downloadable video URL found.");
+        if (cached.isPresent() && cached.get().videoUrl() != null && !cached.get().videoUrl().isBlank()) {
+            cdnUrl = cached.get().videoUrl();
+        } else {
+            MediaInfo info = extractorService.extract(normalizedUrl, MediaType.VIDEO);
+            cdnUrl = info.videoUrl();
+            cacheService.putInCache(normalizedUrl, MediaType.VIDEO, ExtractionResponse.fromMediaInfo(info));
+        }
+
+        if (cdnUrl == null || cdnUrl.isBlank()) {
+            throw new ExtractionFailedException("No direct video stream found for this post.");
         }
 
         String downloadFilename = (filename != null && !filename.isBlank())
                 ? sanitizeFilename(filename, "mp4")
                 : "reel_" + (System.currentTimeMillis() / 1000) + ".mp4";
 
-        return streamFromCdnUrl(videoUrl, downloadFilename, "video/mp4", maxVideoSizeBytes);
+        return streamRemoteUrl(cdnUrl, downloadFilename, "video/mp4", maxVideoSizeBytes);
     }
 
-    private ResponseEntity<StreamingResponseBody> streamFromCdnUrl(
-            String sourceCdnUrl,
-            String downloadFilename,
-            String contentType,
-            long maxSizeBytes) {
+    private ResponseEntity<StreamingResponseBody> streamRemoteUrl(
+            String remoteUrl, String downloadFilename, String contentType, long maxSizeBytes) {
+        HttpURLConnection conn;
+        try {
+            URI uri = URI.create(remoteUrl);
+            conn = (HttpURLConnection) uri.toURL().openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(30_000);
+            conn.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                throw new ExtractionFailedException("Media server returned HTTP " + responseCode);
+            }
+
+            long contentLength = conn.getContentLengthLong();
+            if (contentLength > 0 && contentLength > maxSizeBytes) {
+                throw new VideoTooLargeException("File size (" + (contentLength / (1024 * 1024)) + " MB) exceeds limit.");
+            }
+        } catch (VideoTooLargeException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to connect to media CDN", e);
+            throw new ExtractionFailedException("Failed to stream media: " + e.getMessage());
+        }
 
         StreamingResponseBody stream = outputStream -> {
-            HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection) new URI(sourceCdnUrl).toURL().openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(15_000);
-                connection.setReadTimeout(60_000);
-                connection.setRequestProperty("User-Agent",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            try (InputStream in = conn.getInputStream()) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long totalBytes = 0;
 
-                int statusCode = connection.getResponseCode();
-                if (statusCode != 200) {
-                    throw new ExtractionFailedException("Failed to retrieve media stream from CDN (HTTP " + statusCode + ").");
-                }
-
-                long contentLength = connection.getContentLengthLong();
-                if (contentLength > maxSizeBytes) {
-                    throw new VideoTooLargeException("Payload size (" + (contentLength / 1_048_576) + " MB) exceeds limit of " + (maxSizeBytes / 1_048_576) + " MB.");
-                }
-
-                try (InputStream in = connection.getInputStream()) {
-                    byte[] buffer = new byte[8192];
-                    long totalRead = 0;
-                    int bytesRead;
-                    while ((bytesRead = in.read(buffer)) != -1) {
-                        totalRead += bytesRead;
-                        if (totalRead > maxSizeBytes) {
-                            throw new VideoTooLargeException("Media stream exceeded maximum size limit during download.");
-                        }
-                        outputStream.write(buffer, 0, bytesRead);
-                        outputStream.flush();
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    totalBytes += bytesRead;
+                    if (totalBytes > maxSizeBytes) {
+                        throw new VideoTooLargeException("Stream exceeded maximum permitted file size.");
                     }
+                    outputStream.write(buffer, 0, bytesRead);
                 }
-            } catch (VideoTooLargeException e) {
-                throw e;
-            } catch (Exception e) {
-                log.error("Streaming error", e);
-                throw new ExtractionFailedException("Failed to stream payload: " + e.getMessage());
+                outputStream.flush();
             } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
+                conn.disconnect();
             }
         };
 
@@ -352,10 +358,13 @@ public class ReelController {
                 .body(stream);
     }
 
+    /**
+     * Responds instantly with {"status":"ok"} and NO yt-dlp calls.
+     * Render health check and UptimeRobot will hit this every few minutes.
+     */
     @GetMapping("/health")
-    public ResponseEntity<HealthResponse> health() {
-        String version = ytDlpUpdateService.getVersion();
-        return ResponseEntity.ok(new HealthResponse("ok", version));
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     private void cleanupTemp(Path file, Path dir) {

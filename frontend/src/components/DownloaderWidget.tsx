@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   extractReel,
   getDownloadUrl,
+  pingBackend,
   type ExtractionResult,
   type ApiError,
   type Platform,
@@ -113,6 +114,20 @@ export default function DownloaderWidget({
   const [status, setStatus] = useState<Status>('idle');
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [isWakingUp, setIsWakingUp] = useState(false);
+  const wakeTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Silently ping backend on mount to start waking Render instance if it is asleep
+  useEffect(() => {
+    pingBackend();
+  }, []);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current);
+    };
+  }, []);
 
   const defaultPlaceholder = useMemo(() => {
     if (placeholder) return placeholder;
@@ -150,8 +165,15 @@ export default function DownloaderWidget({
       }
 
       setStatus('loading');
+      setIsWakingUp(false);
       setErrorMessage('');
       setResult(null);
+
+      // Start cold-start notification after 5 seconds
+      if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current);
+      wakeTimerRef.current = setTimeout(() => {
+        setIsWakingUp(true);
+      }, 5000);
 
       try {
         const data = await extractReel(url.trim(), type);
@@ -163,6 +185,9 @@ export default function DownloaderWidget({
           apiErr?.message || 'Unable to download this media. Please verify the link is public and try again.'
         );
         setStatus('error');
+      } finally {
+        if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current);
+        setIsWakingUp(false);
       }
     },
     [url, platform, type]
@@ -173,6 +198,7 @@ export default function DownloaderWidget({
     setStatus('idle');
     setResult(null);
     setErrorMessage('');
+    setIsWakingUp(false);
   }, []);
 
   const downloadLabel = useMemo(() => {
@@ -227,7 +253,7 @@ export default function DownloaderWidget({
               {status === 'loading' ? (
                 <>
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Processing Media...</span>
+                  <span>{isWakingUp ? 'Waking up server...' : 'Processing Media...'}</span>
                 </>
               ) : (
                 <>
@@ -271,18 +297,31 @@ export default function DownloaderWidget({
           </div>
         )}
 
-        {/* Loading State */}
+        {/* Loading State / Cold-Start UX */}
         {status === 'loading' && (
           <div className="card-compact p-6 space-y-4 bg-[var(--bg-input)]/40 border-[var(--border-subtle)] text-center">
             <div className="flex justify-center">
               <span className="w-6 h-6 border-2 border-[var(--border-subtle)] border-t-[var(--brand)] rounded-full animate-spin" />
             </div>
-            <p className="text-sm font-medium text-[var(--text-main)]">
-              Fetching content from {platform} in high quality...
-            </p>
-            <p className="text-xs text-[var(--text-dim)]">
-              This usually takes 2 to 4 seconds.
-            </p>
+            {isWakingUp ? (
+              <div className="space-y-1.5 animate-pulse">
+                <p className="text-sm font-bold text-[var(--brand)]">
+                  Waking up the server, please wait up to 60 seconds...
+                </p>
+                <p className="text-xs text-[var(--text-dim)]">
+                  Free cloud containers spin down when idle. Your media extraction will proceed automatically!
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium text-[var(--text-main)]">
+                  Fetching content from {platform} in high quality...
+                </p>
+                <p className="text-xs text-[var(--text-dim)]">
+                  This usually takes 2 to 4 seconds.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -358,7 +397,7 @@ export default function DownloaderWidget({
                 {downloadLabel}
               </a>
               <p className="text-center text-xs text-[var(--text-dim)] mt-2.5">
-                Fast & direct download • Clean metadata • No watermark
+                Fast &amp; direct download • Clean metadata • No watermark
               </p>
             </div>
           </div>

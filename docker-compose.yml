@@ -21,8 +21,11 @@ services:
     container_name: reeldl-backend
     restart: unless-stopped
     environment:
+      - PORT=8080
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_SSL=${REDIS_SSL:-false}
       - YTDLP_PATH=/usr/local/bin/yt-dlp
       - GALLERYDL_PATH=gallery-dl
       - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}

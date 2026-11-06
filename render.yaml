@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: reel-downloader-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    envVars:
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PORT
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: REDIS_SSL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+

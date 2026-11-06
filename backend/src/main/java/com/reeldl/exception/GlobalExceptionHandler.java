@@ -41,6 +41,13 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse("Rate Limit Exceeded", ex.getMessage(), 429));
     }
 
+    @ExceptionHandler(ServerBusyException.class)
+    public ResponseEntity<ErrorResponse> handleServerBusy(ServerBusyException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "10")
+                .body(new ErrorResponse("Server Busy", ex.getMessage(), 503));
+    }
+
     @ExceptionHandler(ExtractionTimeoutException.class)
     public ResponseEntity<ErrorResponse> handleTimeout(ExtractionTimeoutException ex) {
         return buildResponse(HttpStatus.GATEWAY_TIMEOUT, "Extraction Timeout", ex.getMessage());
@@ -69,4 +76,3 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse(error, message, status.value()));
     }
 }
-

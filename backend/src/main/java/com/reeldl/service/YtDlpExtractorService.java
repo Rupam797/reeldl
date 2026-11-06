@@ -12,6 +12,7 @@ import com.reeldl.exception.ExtractionTimeoutException;
 import com.reeldl.validator.PlatformDetector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -22,10 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -41,51 +39,67 @@ public class YtDlpExtractorService implements ExtractorService {
     private final int timeoutSeconds;
     private final PlatformDetector platformDetector;
     private final ObjectMapper objectMapper;
+    private final ProcessLimiterService processLimiterService;
 
+    @Autowired
     public YtDlpExtractorService(
             @Value("${app.ytdlp-path:/usr/local/bin/yt-dlp}") String ytdlpPath,
             @Value("${app.gallerydl-path:gallery-dl}") String galleryDlPath,
             @Value("${app.ytdlp-cookies-file:#{null}}") String cookiesFile,
             @Value("${app.extraction-timeout-seconds:20}") int timeoutSeconds,
             PlatformDetector platformDetector,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ProcessLimiterService processLimiterService) {
         this.ytdlpPath = ytdlpPath;
         this.galleryDlPath = galleryDlPath;
         this.cookiesFile = cookiesFile;
         this.timeoutSeconds = timeoutSeconds;
         this.platformDetector = platformDetector;
         this.objectMapper = objectMapper;
+        this.processLimiterService = processLimiterService;
+    }
+
+    public YtDlpExtractorService(
+            String ytdlpPath,
+            String galleryDlPath,
+            String cookiesFile,
+            int timeoutSeconds,
+            PlatformDetector platformDetector,
+            ObjectMapper objectMapper) {
+        this(ytdlpPath, galleryDlPath, cookiesFile, timeoutSeconds, platformDetector, objectMapper, new ProcessLimiterService());
     }
 
     @Override
-    public MediaInfo extract(String url, MediaType type) {
-        MediaType targetType = (type != null) ? type : MediaType.VIDEO;
-        PlatformDetector.DetectionResult detection = platformDetector.detectAndValidate(url);
+    public MediaInfo extract(String rawUrl, MediaType type) {
+        PlatformDetector.DetectionResult detection = platformDetector.detectAndValidate(rawUrl);
         String normalizedUrl = detection.normalizedUrl();
         Platform platform = detection.platform();
 
-        log.debug("Extracting {} for {} on platform {}", targetType, normalizedUrl, platform);
-
-        if (targetType == MediaType.PHOTO && platform == Platform.INSTAGRAM) {
-            return extractPhotoWithGalleryDl(normalizedUrl, platform);
+        if (type == MediaType.PHOTO) {
+            return extractPhoto(normalizedUrl, platform);
+        } else {
+            return extractWithYtDlp(normalizedUrl, platform, type);
         }
-
-        return extractWithYtDlp(normalizedUrl, platform, targetType);
     }
 
-    private MediaInfo extractPhotoWithGalleryDl(String url, Platform platform) {
-        List<String> args = List.of(galleryDlPath, "-g", url);
-        ProcessBuilder pb = new ProcessBuilder(args);
-        pb.redirectErrorStream(false);
-
+    private MediaInfo extractPhoto(String url, Platform platform) {
+        // Try gallery-dl first for direct photo URLs
         try {
+            List<String> command = List.of(galleryDlPath, "-g", url);
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+
             Process process = pb.start();
+
             CompletableFuture<List<String>> stdoutFuture = CompletableFuture.supplyAsync(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                    return reader.lines().filter(line -> !line.isBlank()).collect(Collectors.toList());
+                    return reader.lines()
+                            .map(String::trim)
+                            .filter(line -> line.startsWith("http://") || line.startsWith("https://"))
+                            .collect(Collectors.toList());
                 } catch (IOException e) {
-                    return Collections.emptyList();
+                    return List.of();
                 }
             });
 
@@ -121,6 +135,19 @@ public class YtDlpExtractorService implements ExtractorService {
     }
 
     private MediaInfo extractWithYtDlp(String url, Platform platform, MediaType type) {
+        try {
+            return processLimiterService.runWithYtDlpPermit(() -> executeYtDlp(url, platform, type));
+        } catch (ContentUnavailableException | ExtractionTimeoutException | ExtractionFailedException e) {
+            throw e;
+        } catch (com.reeldl.exception.ServerBusyException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("yt-dlp extraction failed for url: {}", url, e);
+            throw new ExtractionFailedException("Extraction failed: " + e.getMessage());
+        }
+    }
+
+    private MediaInfo executeYtDlp(String url, Platform platform, MediaType type) {
         List<String> command = new ArrayList<>();
         command.add(ytdlpPath);
         command.add("--no-playlist");
@@ -169,112 +196,99 @@ public class YtDlpExtractorService implements ExtractorService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            throw new ExtractionTimeoutException("Extraction was interrupted.");
+            throw new ExtractionFailedException("Extraction was interrupted.");
         }
 
         if (!finished) {
             process.destroyForcibly();
+            log.warn("yt-dlp process timed out after {} seconds", timeoutSeconds);
             throw new ExtractionTimeoutException("Extraction timed out after " + timeoutSeconds + " seconds.");
         }
 
+        int exitCode = process.exitValue();
         String stdout = stdoutFuture.join();
         String stderr = stderrFuture.join();
 
-        if (!stderr.isBlank()) {
-            String stderrLower = stderr.toLowerCase();
-            if (stderrLower.contains("private") || stderrLower.contains("login required") || stderrLower.contains("login_required")) {
-                throw new ContentUnavailableException("This content is private or requires authentication.");
-            }
-            if (stderrLower.contains("not available") || stderrLower.contains("does not exist") || stderrLower.contains("not found")) {
-                throw new ContentUnavailableException("Content is unavailable or has been removed.");
-            }
+        if (exitCode != 0) {
+            log.warn("yt-dlp exited with code {}. stderr: {}", exitCode, stderr);
+            classifyStderr(stderr);
+            throw new ExtractionFailedException("Extraction engine failed with exit code " + exitCode + ".");
         }
 
-        if (process.exitValue() != 0) {
-            throw new ExtractionFailedException("Extraction failed. The post may be restricted or link invalid.");
-        }
+        return parseJson(stdout, url, platform, type);
+    }
 
-        if (stdout.isBlank()) {
-            throw new ExtractionFailedException("Empty output returned from extractor.");
+    private void classifyStderr(String stderr) {
+        String lower = stderr.toLowerCase();
+        if (lower.contains("private") || lower.contains("login required")) {
+            throw new ContentUnavailableException("This media is private or requires login. Only public content can be downloaded.");
         }
+        if (lower.contains("not available") || lower.contains("does not exist") || lower.contains("404")) {
+            throw new ContentUnavailableException("This media is no longer available or was removed.");
+        }
+    }
 
+    private MediaInfo parseJson(String json, String sourceUrl, Platform platform, MediaType type) {
         try {
-            JsonNode root = objectMapper.readTree(stdout);
-            String title = getTextOrDefault(root, "title", platform.name() + " Media");
-            String thumbnail = getTextOrDefault(root, "thumbnail", "");
-            String uploader = getTextOrDefault(root, "uploader", getTextOrDefault(root, "channel", "unknown"));
-            String sourceUrl = getTextOrDefault(root, "webpage_url", url);
+            JsonNode root = objectMapper.readTree(json);
 
-            String duration = "Unknown";
-            if (root.has("duration_string") && !root.get("duration_string").isNull()) {
-                duration = root.get("duration_string").asText();
-            } else if (root.has("duration") && !root.get("duration").isNull()) {
-                int secs = root.get("duration").asInt();
-                duration = String.format("%d:%02d", secs / 60, secs % 60);
+            String title = root.path("title").asText(platform.name() + " Media");
+            String thumbnail = root.path("thumbnail").asText("");
+            String videoUrl = root.path("url").asText("");
+            String uploader = root.path("uploader").asText(root.path("channel").asText(""));
+            double durationSec = root.path("duration").asDouble(0.0);
+
+            String durationStr = root.path("duration_string").asText("");
+            if (durationStr.isBlank() && durationSec > 0) {
+                int mins = (int) (durationSec / 60);
+                int secs = (int) (durationSec % 60);
+                durationStr = String.format("%d:%02d", mins, secs);
+            } else if (durationStr.isBlank()) {
+                durationStr = "0:00";
             }
 
-            // Direct URL
-            String videoUrl = getTextOrDefault(root, "url", "");
-            List<FormatInfo> formatList = new ArrayList<>();
-            Set<String> seenQualities = new HashSet<>();
-
-            if (root.has("formats") && root.get("formats").isArray()) {
-                JsonNode formatsNode = root.get("formats");
-                for (int i = formatsNode.size() - 1; i >= 0; i--) {
-                    JsonNode fmt = formatsNode.get(i);
-                    String fmtUrl = getTextOrDefault(fmt, "url", "");
-                    String vcodec = getTextOrDefault(fmt, "vcodec", "");
-                    String ext = getTextOrDefault(fmt, "ext", "mp4");
-                    Long filesize = fmt.has("filesize") && !fmt.get("filesize").isNull() ? fmt.get("filesize").asLong() : null;
-
-                    String quality = "HD";
-                    if (fmt.has("format_note") && !fmt.get("format_note").isNull()) {
-                        quality = fmt.get("format_note").asText();
-                    } else if (fmt.has("resolution") && !fmt.get("resolution").isNull()) {
-                        quality = fmt.get("resolution").asText();
-                    } else if (fmt.has("height") && !fmt.get("height").isNull()) {
-                        quality = fmt.get("height").asInt() + "p";
+            List<FormatInfo> formats = new ArrayList<>();
+            JsonNode formatsNode = root.path("formats");
+            if (formatsNode.isArray()) {
+                for (JsonNode f : formatsNode) {
+                    String quality = f.path("format_note").asText("");
+                    if (quality.isBlank()) {
+                        quality = f.path("resolution").asText("");
                     }
+                    if (quality.isBlank()) {
+                        int h = f.path("height").asInt(0);
+                        quality = h > 0 ? h + "p" : f.path("format_id").asText("Default");
+                    }
+                    String ext = f.path("ext").asText("mp4");
+                    Long fileSize = f.hasNonNull("filesize") ? f.path("filesize").asLong()
+                            : (f.hasNonNull("filesize_approx") ? f.path("filesize_approx").asLong() : null);
 
-                    if (!vcodec.equals("none") && !seenQualities.contains(quality)) {
-                        seenQualities.add(quality);
-                        formatList.add(new FormatInfo(quality, ext, filesize));
-                        if (videoUrl.isEmpty() && !fmtUrl.isEmpty()) {
-                            videoUrl = fmtUrl;
-                        }
+                    formats.add(new FormatInfo(quality, ext, fileSize));
+
+                    if (videoUrl.isBlank() && f.hasNonNull("url") && !"none".equalsIgnoreCase(f.path("vcodec").asText("none"))) {
+                        videoUrl = f.path("url").asText("");
                     }
                 }
             }
 
-            if (videoUrl.isEmpty()) {
-                videoUrl = thumbnail; // Fallback for photos
-            }
-
-            if (formatList.isEmpty()) {
-                formatList.add(new FormatInfo(type == MediaType.AUDIO ? "MP3 320kbps" : "Original Quality", type == MediaType.AUDIO ? "mp3" : "mp4", null));
+            if (formats.isEmpty()) {
+                formats.add(new FormatInfo("HD 1080p", type == MediaType.AUDIO ? "mp3" : (type == MediaType.PHOTO ? "jpg" : "mp4"), null));
             }
 
             return new MediaInfo(
                     title,
                     thumbnail,
-                    duration,
+                    durationStr,
                     videoUrl,
                     uploader,
                     sourceUrl,
                     platform,
                     type,
-                    formatList
+                    formats
             );
         } catch (Exception e) {
-            log.error("Failed to parse extractor JSON: {}", e.getMessage());
-            throw new ExtractionFailedException("Failed to parse extracted media information.");
+            log.error("Failed to parse yt-dlp JSON output", e);
+            throw new ExtractionFailedException("Failed to parse media metadata from extraction engine.");
         }
-    }
-
-    private String getTextOrDefault(JsonNode node, String field, String defaultValue) {
-        if (node.has(field) && !node.get(field).isNull()) {
-            return node.get(field).asText();
-        }
-        return defaultValue;
     }
 }

@@ -6,6 +6,7 @@ import com.reeldl.dto.ExtractionResponse;
 import com.reeldl.dto.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -28,7 +29,7 @@ public class CacheService {
     private final Duration ttl;
 
     public CacheService(
-            StringRedisTemplate redisTemplate,
+            @Autowired(required = false) StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
             @Value("${app.cache-ttl-minutes:30}") int ttlMinutes) {
         this.redisTemplate = redisTemplate;
@@ -41,6 +42,10 @@ public class CacheService {
     }
 
     public Optional<ExtractionResponse> getFromCache(String normalizedUrl, MediaType type) {
+        if (redisTemplate == null) {
+            return Optional.empty();
+        }
+
         String key = buildKey(normalizedUrl, type);
         try {
             String json = redisTemplate.opsForValue().get(key);
@@ -51,7 +56,7 @@ public class CacheService {
             log.debug("Cache HIT for key: {}", key);
             return Optional.of(response);
         } catch (Exception e) {
-            log.warn("Failed to read from cache: {}", e.getMessage());
+            log.warn("Redis unavailable or read failed, skipping cache: {}", e.getMessage());
             return Optional.empty();
         }
     }
@@ -61,6 +66,10 @@ public class CacheService {
     }
 
     public void putInCache(String normalizedUrl, MediaType type, ExtractionResponse response) {
+        if (redisTemplate == null) {
+            return;
+        }
+
         String key = buildKey(normalizedUrl, type);
         try {
             String json = objectMapper.writeValueAsString(response);
@@ -68,6 +77,8 @@ public class CacheService {
             log.debug("Cache PUT for key: {} (TTL: {})", key, ttl);
         } catch (JsonProcessingException e) {
             log.warn("Failed to serialize response for caching: {}", e.getMessage());
+        } catch (Exception e) {
+            log.warn("Redis unavailable or write failed, skipping cache: {}", e.getMessage());
         }
     }
 

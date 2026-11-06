@@ -315,6 +315,119 @@ The frontend includes `<AdSlot />` components at three positions on every page: 
 
 ---
 
+## Free Deploy: Render + Upstash + Vercel
+
+You can host the entire system completely free without any credit card required:
+- **Backend**: [Render](https://render.com) (Free Docker Web Service, 512 MB RAM)
+- **Redis Cache**: [Upstash](https://upstash.com) (Free Serverless Redis, 10,000 commands/day)
+- **Frontend**: [Vercel](https://vercel.com) (Free Next.js Hosting with global CDN edge)
+- **Keep-Warm**: [UptimeRobot](https://uptimerobot.com) (Free 5-minute ping to prevent Render cold starts)
+
+```
+┌─────────────────┐       ┌───────────────────────────┐       ┌────────────────────────┐
+│  User Browser   │──────▶│   Vercel (Frontend)       │──────▶│   Render (Backend)     │
+│                 │◀──────│   Next.js 14 on Edge CDN  │       │   Docker Web Service   │
+└─────────────────┘       └───────────────────────────┘       └───────────┬────────────┘
+                                                                          │
+                                                              ┌───────────▼────────────┐
+                                                              │   Upstash (Redis)      │
+                                                              │   TLS / rediss://      │
+                                                              └────────────────────────┘
+```
+
+---
+
+### Step 1: Set Up Free Redis on Upstash
+
+1. Go to [console.upstash.com](https://console.upstash.com) and create a free account.
+2. Click **Create Database**:
+   - Name: `reeldl-redis`
+   - Type: **Regional** (choose region closest to your Render service, e.g. Frankfurt or US-East)
+   - Enable **TLS (SSL)**.
+3. Once created, scroll down to the **Connect** section:
+   - Note the **Endpoint** (e.g. `flowing-otter-12345.upstash.io`)
+   - Note the **Port** (e.g. `6379`)
+   - Note the **Password**
+
+---
+
+### Step 2: Deploy Backend on Render (Docker)
+
+You can deploy via the included Blueprint `render.yaml` or manually via Render Dashboard:
+
+#### Option A: Automatic Blueprint Deploy
+1. Push this repository to your GitHub account.
+2. In Render Dashboard, click **New +** > **Blueprint**.
+3. Select your repository. Render will automatically detect `render.yaml`.
+4. Fill in the environment variables when prompted and click **Apply**.
+
+#### Option B: Manual Web Service Deploy
+1. In Render Dashboard, click **New +** > **Web Service**.
+2. Connect your GitHub repository.
+3. Configure the service:
+   - **Name**: `reeldl-backend`
+   - **Language / Runtime**: **Docker**
+   - **Docker Context**: `./backend`
+   - **Dockerfile Path**: `./backend/Dockerfile`
+   - **Instance Type**: **Free** (512 MB RAM, 0.1 CPU)
+   - **Health Check Path**: `/api/health`
+4. Add the following **Environment Variables**:
+   | Key | Value | Notes |
+   | --- | --- | --- |
+   | `PORT` | `8080` | Render default port |
+   | `REDIS_HOST` | `your-db.upstash.io` | Upstash endpoint hostname |
+   | `REDIS_PORT` | `6379` | Upstash port |
+   | `REDIS_PASSWORD` | `your_upstash_password` | Upstash password |
+   | `REDIS_SSL` | `true` | Required for Upstash TLS connection |
+   | `ALLOWED_ORIGINS` | `https://your-frontend.vercel.app` | Add your Vercel URL (comma-separated if multiple) |
+5. Click **Create Web Service**. Wait 3–4 minutes for Docker to build and start.
+6. Once deployed, copy your backend URL (e.g. `https://reeldl-backend.onrender.com`). Verify by visiting `https://reeldl-backend.onrender.com/api/health` (should return `{"status":"ok"}`).
+
+---
+
+### Step 3: Deploy Frontend on Vercel
+
+1. Go to [vercel.com](https://vercel.com) and click **Add New...** > **Project**.
+2. Import your GitHub repository.
+3. In the project setup screen:
+   - **Framework Preset**: `Next.js`
+   - **Root Directory**: Click *Edit* and select **`frontend`**.
+4. Expand **Environment Variables** and add:
+   | Key | Value |
+   | --- | --- |
+   | `NEXT_PUBLIC_API_URL` | `https://your-backend.onrender.com` *(no trailing slash)* |
+   | `NEXT_PUBLIC_SITE_URL` | `https://your-frontend.vercel.app` |
+5. Click **Deploy**. Vercel will build and deploy the Next.js site in ~60 seconds.
+6. Copy your Vercel URL (e.g. `https://reeldl.vercel.app`) and update the `ALLOWED_ORIGINS` variable in your Render backend settings!
+
+---
+
+### Step 4: Keep Render Awake (Optional but Recommended)
+
+Render free instances spin down after 15 minutes of inactivity, causing a 30–50 second cold start on the next request.
+
+1. Go to [uptimerobot.com](https://uptimerobot.com) and create a free account.
+2. Click **Add New Monitor**:
+   - **Monitor Type**: `HTTP(s)`
+   - **Friendly Name**: `ReelDL Backend Keep-Alive`
+   - **URL (or IP)**: `https://your-backend.onrender.com/api/health`
+   - **Monitoring Interval**: Every `5 minutes`
+3. Click **Create Monitor**. The `/api/health` endpoint responds instantly with zero CPU load and keeps your Render container awake 24/7!
+
+---
+
+### Troubleshooting Table
+
+| Issue | Root Cause | Solution |
+| --- | --- | --- |
+| **CORS Error in Browser** (`Cross-Origin Request Blocked`) | The backend `ALLOWED_ORIGINS` does not match the frontend Vercel URL. | Update `ALLOWED_ORIGINS` on Render to include your exact Vercel domain (e.g. `https://your-app.vercel.app` with `https://`, no trailing slash). You can also set `ALLOWED_ORIGINS=*` temporarily to test. |
+| **502 Bad Gateway / Network Error** | Backend is sleeping or starting up, or Render build failed. | Check Render logs. The frontend automatically shows *"Waking up the server, please wait up to 60 seconds..."* and retries. Set up UptimeRobot to ping `/api/health` every 5 minutes to prevent sleep. |
+| **Cold Start Delays (40–60s)** | Free Render containers spin down after 15 min of idle. | The frontend has built-in cold-start tolerance (70s timeout, silent keep-warm ping on page load). Configure a free UptimeRobot monitor to keep the container continuously warm. |
+| **Redis Connection Error / Cache Ignored** | Incorrect Upstash credentials or SSL missing. | Verify `REDIS_SSL=true`, `REDIS_PORT=6379`, and `REDIS_PASSWORD` are set correctly on Render. Note: ReelDL is resilient and will still function normally with in-memory rate limiting even if Redis is unreachable. |
+| **Out of Memory (OOM / Code 137)** | Render free tier has 512 MB memory limit; yt-dlp/ffmpeg spikes memory. | Our Dockerfile automatically configures `JAVA_TOOL_OPTIONS="-Xmx256m -Xss512k -XX:+UseSerialGC -XX:MaxMetaspaceSize=128m"`, limits concurrent `yt-dlp` processes to 2, and limits `ffmpeg` MP3 conversions to 1 at a time to stay strictly within 512 MB. |
+
+---
+
 ## Configuration Reference
 
 | Variable              | Default          | Description                                    |
