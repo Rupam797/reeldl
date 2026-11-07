@@ -66,7 +66,8 @@ public class YtDlpExtractorService implements ExtractorService {
             int timeoutSeconds,
             PlatformDetector platformDetector,
             ObjectMapper objectMapper) {
-        this(ytdlpPath, galleryDlPath, cookiesFile, timeoutSeconds, platformDetector, objectMapper, new ProcessLimiterService());
+        this(ytdlpPath, galleryDlPath, cookiesFile, timeoutSeconds, platformDetector, objectMapper,
+                new ProcessLimiterService());
     }
 
     @Override
@@ -123,8 +124,7 @@ public class YtDlpExtractorService implements ExtractorService {
                         url,
                         platform,
                         MediaType.PHOTO,
-                        formats
-                );
+                        formats);
             }
         } catch (Exception e) {
             log.warn("gallery-dl failed, falling back to yt-dlp: {}", e.getMessage());
@@ -314,6 +314,7 @@ public class YtDlpExtractorService implements ExtractorService {
             }
 
             if (formats.isEmpty()) {
+                        
                 formats.add(new FormatInfo("HD 1080p", type == MediaType.AUDIO ? "mp3" : (type == MediaType.PHOTO ? "jpg" : "mp4"), null));
             }
 
@@ -325,8 +326,7 @@ public class YtDlpExtractorService implements ExtractorService {
                     uploader,
                     sourceUrl,
                     platform,
-                    type,
-                    formats
+                    type,        formats
             );
         } catch (Exception e) {
             log.error("Failed to parse yt-dlp JSON output", e);
