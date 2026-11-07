@@ -150,6 +150,7 @@ public class YtDlpExtractorService implements ExtractorService {
     private MediaInfo executeYtDlp(String url, Platform platform, MediaType type) {
         List<String> command = new ArrayList<>();
         command.add(ytdlpPath);
+        command.add("--quiet");
         command.add("--no-playlist");
         command.add("--no-warnings");
         command.add("-j");
@@ -215,7 +216,28 @@ public class YtDlpExtractorService implements ExtractorService {
             throw new ExtractionFailedException("Extraction engine failed with exit code " + exitCode + ".");
         }
 
-        return parseJson(stdout, url, platform, type);
+        // Find the JSON payload from stdout
+        String jsonPayload = "";
+        for (String line : stdout.lines().toList()) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                jsonPayload = trimmed;
+                break;
+            }
+        }
+        if (jsonPayload.isEmpty()) {
+            int firstBrace = stdout.indexOf('{');
+            int lastBrace = stdout.lastIndexOf('}');
+            if (firstBrace != -1 && lastBrace > firstBrace) {
+                jsonPayload = stdout.substring(firstBrace, lastBrace + 1);
+            }
+        }
+        if (jsonPayload.isEmpty()) {
+            log.error("yt-dlp produced no JSON. exitCode={}, stdout={}, stderr={}", exitCode, stdout, stderr);
+            throw new ExtractionFailedException("Extraction engine returned no parseable JSON.");
+        }
+
+        return parseJson(jsonPayload, url, platform, type);
     }
 
     private void classifyStderr(String stderr) {
@@ -252,12 +274,15 @@ public class YtDlpExtractorService implements ExtractorService {
             if (formatsNode.isArray()) {
                 for (JsonNode f : formatsNode) {
                     String quality = f.path("format_note").asText("");
-                    if (quality.isBlank()) {
+                    if (quality.isBlank() || "null".equalsIgnoreCase(quality)) {
                         quality = f.path("resolution").asText("");
                     }
-                    if (quality.isBlank()) {
+                    if (quality.isBlank() || "null".equalsIgnoreCase(quality)) {
                         int h = f.path("height").asInt(0);
                         quality = h > 0 ? h + "p" : f.path("format_id").asText("Default");
+                    }
+                    if ("null".equalsIgnoreCase(quality)) {
+                        quality = "Default";
                     }
                     String ext = f.path("ext").asText("mp4");
                     Long fileSize = f.hasNonNull("filesize") ? f.path("filesize").asLong()
@@ -265,8 +290,21 @@ public class YtDlpExtractorService implements ExtractorService {
 
                     formats.add(new FormatInfo(quality, ext, fileSize));
 
-                    if (videoUrl.isBlank() && f.hasNonNull("url") && !"none".equalsIgnoreCase(f.path("vcodec").asText("none"))) {
+                    String vcodec = f.path("vcodec").asText("");
+                    if (videoUrl.isBlank() && f.hasNonNull("url") && !"none".equalsIgnoreCase(vcodec)) {
                         videoUrl = f.path("url").asText("");
+                    }
+                }
+            }
+
+            if (videoUrl.isBlank() && root.hasNonNull("url")) {
+                videoUrl = root.path("url").asText("");
+            }
+            if (videoUrl.isBlank() && formatsNode.isArray()) {
+                for (JsonNode f : formatsNode) {
+                    if (f.hasNonNull("url") && !f.path("url").asText("").isBlank()) {
+                        videoUrl = f.path("url").asText("");
+                        break;
                     }
                 }
             }
@@ -287,7 +325,8 @@ public class YtDlpExtractorService implements ExtractorService {
                     formats
             );
         } catch (Exception e) {
-            log.error("Failed to parse yt-dlp JSON output", e);
+            log.error("Failed to parse yt-dlp JSON output. Error: {}. Input sample: {}", 
+                    e.getMessage(), json.substring(0, Math.min(json.length(), 200)), e);
             throw new ExtractionFailedException("Failed to parse media metadata from extraction engine.");
         }
     }
