@@ -234,7 +234,7 @@ public class YtDlpExtractorService implements ExtractorService {
         }
         if (jsonPayload.isEmpty()) {
             log.error("yt-dlp produced no JSON. exitCode={}, stdout={}, stderr={}", exitCode, stdout, stderr);
-            throw new ExtractionFailedException("Extraction engine returned no parseable JSON.");
+            throw new ExtractionFailedException("No JSON from yt-dlp. stdout len=" + stdout.length() + " [sample=" + (stdout.length() > 100 ? stdout.substring(0, 100) : stdout) + "] stderr=" + (stderr.length() > 200 ? stderr.substring(0, 200) : stderr));
         }
 
         return parseJson(jsonPayload, url, platform, type);
@@ -327,7 +327,7 @@ public class YtDlpExtractorService implements ExtractorService {
         } catch (Exception e) {
             log.error("Failed to parse yt-dlp JSON output. Error: {}. Input sample: {}", 
                     e.getMessage(), json.substring(0, Math.min(json.length(), 200)), e);
-            throw new ExtractionFailedException("Failed to parse media metadata from extraction engine.");
+            throw new ExtractionFailedException("Failed to parse media metadata: " + e.getClass().getSimpleName() + ": " + e.getMessage() + " | json length: " + json.length() + " | sample: " + (json.length() > 80 ? json.substring(0, 80) : json));
         }
     }
 }
