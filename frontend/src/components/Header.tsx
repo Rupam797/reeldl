@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import ThemeToggle from './ThemeToggle';
+import BrandIcon from './BrandIcon';
 
 const navLinks = [
   { href: '/', label: 'Reel Downloader' },
@@ -18,7 +19,8 @@ export default function Header() {
     <header className="sticky top-0 z-50 border-b border-[var(--border-nav)] bg-[var(--bg-dark)]/95">
       <nav className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
         {/* Brand */}
-        <Link href="/" className="flex items-center gap-2 group">
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <BrandIcon size={30} />
           <span className="text-xl sm:text-2xl font-extrabold tracking-tight text-[var(--text-main)]">
             Reel<span className="text-[var(--brand)]">DL</span>
           </span>

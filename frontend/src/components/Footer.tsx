@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import BrandIcon from './BrandIcon';
 
 const toolLinks = [
   { href: '/', label: 'Instagram Reel Downloader' },
@@ -29,7 +30,8 @@ export default function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           {/* Identity */}
           <div className="space-y-3 md:col-span-1">
-            <Link href="/" className="inline-block">
+            <Link href="/" className="inline-flex items-center gap-2 group">
+              <BrandIcon size={24} />
               <span className="text-xl font-extrabold tracking-tight text-[var(--text-main)]">
                 Reel<span className="text-[var(--brand)]">DL</span>
               </span>
