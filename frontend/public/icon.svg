@@ -1,33 +1,21 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="reelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FF414D" />
-      <stop offset="50%" stop-color="#FF5C4D" />
-      <stop offset="100%" stop-color="#FF7A59" />
-    </linearGradient>
-    <filter id="subtleShadow" x="-10%" y="-10%" width="120%" height="120%" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#FF414D" flood-opacity="0.25" />
-    </filter>
-  </defs>
+  <!-- Solid Flat Brand Squircle (Zero Gradient) -->
+  <rect width="512" height="512" rx="120" fill="#FF6B5B" />
 
-  <!-- Background Squircle -->
-  <rect width="512" height="512" rx="112" fill="url(#reelGrad)" filter="url(#subtleShadow)" />
-
-  <!-- Subtle Inner Border Highlight -->
-  <rect x="2" y="2" width="508" height="508" rx="110" stroke="white" stroke-opacity="0.15" stroke-width="4" />
-
-  <!-- Reel Film Sprockets -->
-  <circle cx="176" cy="95" r="18" fill="white" fill-opacity="0.85" />
-  <circle cx="256" cy="95" r="18" fill="white" fill-opacity="0.85" />
-  <circle cx="336" cy="95" r="18" fill="white" fill-opacity="0.85" />
-
-  <!-- Arrow Stem -->
-  <rect x="230" y="145" width="52" height="150" rx="26" fill="white" />
-
-  <!-- Arrow Chevron -->
-  <path d="M150 270L256 376L362 270" stroke="white" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Minimal White Vector Arrow -->
+  <path
+    d="M256 120V320M256 320L168 232M256 320L344 232"
+    stroke="#FFFFFF"
+    stroke-width="48"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 
   <!-- Bottom Cradle Tray -->
-  <rect x="140" y="415" width="232" height="38" rx="19" fill="white" />
+  <path
+    d="M140 390H372"
+    stroke="#FFFFFF"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
 </svg>
-

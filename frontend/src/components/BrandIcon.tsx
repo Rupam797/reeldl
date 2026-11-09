@@ -14,39 +14,25 @@ export default function BrandIcon({ className = '', size = 28 }: BrandIconProps)
       className={`flex-shrink-0 transition-transform group-hover:scale-105 ${className}`}
       aria-hidden="true"
     >
-      <defs>
-        <linearGradient id="headerReelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#FF414D" />
-          <stop offset="50%" stopColor="#FF5C4D" />
-          <stop offset="100%" stopColor="#FF7A59" />
-        </linearGradient>
-      </defs>
+      {/* Flat Brand Squircle (Zero Gradient) */}
+      <rect width="512" height="512" rx="120" fill="var(--brand, #FF6B5B)" />
 
-      {/* Background Squircle */}
-      <rect width="512" height="512" rx="112" fill="url(#headerReelGrad)" />
-
-      {/* Inner Border */}
-      <rect x="2" y="2" width="508" height="508" rx="110" stroke="white" strokeOpacity="0.2" strokeWidth="4" />
-
-      {/* Reel Film Sprockets */}
-      <circle cx="176" cy="95" r="18" fill="white" fillOpacity="0.85" />
-      <circle cx="256" cy="95" r="18" fill="white" fillOpacity="0.85" />
-      <circle cx="336" cy="95" r="18" fill="white" fillOpacity="0.85" />
-
-      {/* Arrow Stem */}
-      <rect x="230" y="145" width="52" height="150" rx="26" fill="white" />
-
-      {/* Arrow Chevron */}
+      {/* Minimal White Vector Arrow */}
       <path
-        d="M150 270L256 376L362 270"
-        stroke="white"
-        strokeWidth="52"
+        d="M256 120V320M256 320L168 232M256 320L344 232"
+        stroke="#FFFFFF"
+        strokeWidth="48"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
 
       {/* Bottom Cradle Tray */}
-      <rect x="140" y="415" width="232" height="38" rx="19" fill="white" />
+      <path
+        d="M140 390H372"
+        stroke="#FFFFFF"
+        strokeWidth="48"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
